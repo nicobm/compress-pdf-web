@@ -215,7 +215,12 @@ import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
 
 const PDFLib = await import('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm');
-const { PDFDocument, PDFRawStream, PDFName, PDFNumber, rgb } = PDFLib;
+const {
+  PDFDocument, PDFRawStream, PDFName, PDFNumber, rgb,
+  pushGraphicsState, popGraphicsState,
+  beginText, endText, setFontAndSize, showText,
+  setTextMatrix, setTextRenderingMode, TextRenderingMode,
+} = PDFLib;
 
 const pakoMod = await import('https://cdn.jsdelivr.net/npm/pako@2.1.0/+esm');
 const pakoInflate = pakoMod.inflate || pakoMod.default?.inflate;
@@ -479,14 +484,16 @@ async function compressRasterize(file, dpi, jpegQuality, addTextLayer, onProgres
     // Draw the image (full page)
     page.drawImage(jpgImage, { x: 0, y: 0, width: pageWidth, height: pageHeight });
 
-    // Draw invisible text layer on top
+    // Draw invisible text layer using PDF text rendering mode 3
+    // This is the standard method used by Tesseract OCR and professional tools.
+    // Tr 3 = invisible text: not rendered visually but still selectable/searchable.
     if (addTextLayer && pg.textItems.length > 0) {
       const scaleX = pageWidth / pg.ptWidth;
       const scaleY = pageHeight / pg.ptHeight;
 
       for (const item of pg.textItems) {
         try {
-          const tx = item.transform; // [scaleX, skewY, skewX, scaleY, translateX, translateY]
+          const tx = item.transform;
           if (!tx || tx.length < 6) continue;
 
           const x = tx[4] * scaleX;
@@ -495,25 +502,30 @@ async function compressRasterize(file, dpi, jpegQuality, addTextLayer, onProgres
 
           if (fontSize < 1 || !item.str.trim()) continue;
 
-          // Pick font: CJK if text contains CJK characters, else latin
           const hasCJK = CJK_REGEX.test(item.str);
           const font = (hasCJK && embeddedCJKFont) ? embeddedCJKFont : embeddedFont;
           if (!font) continue;
 
-          // Filter out characters the font can't encode
+          // Filter characters the font can't encode
           let text = '';
           for (const ch of item.str) {
             try { font.encodeText(ch); text += ch; } catch { text += ' '; }
           }
           if (!text.trim()) continue;
 
-          page.drawText(text, {
-            x, y,
-            size: Math.max(1, fontSize),
-            font,
-            color: rgb(0, 0, 0),
-            opacity: 0, // invisible!
-          });
+          const encodedText = font.encodeText(text);
+
+          // Use raw PDF operators: BT, 3 Tr, Tf, Tm, Tj, ET
+          page.pushOperators(
+            pushGraphicsState(),
+            beginText(),
+            setTextRenderingMode(TextRenderingMode.Invisible),
+            setFontAndSize(font.name, Math.max(1, fontSize)),
+            setTextMatrix(1, 0, 0, 1, x, y),
+            showText(encodedText),
+            endText(),
+            popGraphicsState(),
+          );
         } catch (e) {
           // Skip individual text items that fail
         }
