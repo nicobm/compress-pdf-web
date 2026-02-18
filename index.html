@@ -344,6 +344,7 @@ async function compressRasterize(file, dpi, jpegQuality, addTextLayer, onProgres
     if (addTextLayer && pg.textItems.length > 0) {
       const scaleX = pageWidth / pg.ptWidth;
       const scaleY = pageHeight / pg.ptHeight;
+      let drawn = 0, failed = 0;
 
       for (const item of pg.textItems) {
         try {
@@ -364,11 +365,6 @@ async function compressRasterize(file, dpi, jpegQuality, addTextLayer, onProgres
           }
           if (!text.trim()) continue;
 
-          // Get the PDF font key registered for this page
-          // We use drawText with very small size first to ensure font is registered,
-          // then we'll use the content stream approach.
-          // Actually, the simplest reliable approach: just use drawText with opacity 0.001
-          // (essentially invisible but text IS in the content stream with proper encoding)
           page.drawText(text, {
             x, y,
             size: fontSize,
@@ -376,8 +372,15 @@ async function compressRasterize(file, dpi, jpegQuality, addTextLayer, onProgres
             color: rgb(0, 0, 0),
             opacity: 0.00001,
           });
-        } catch(e) { /* skip */ }
+          drawn++;
+        } catch(e) {
+          failed++;
+          console.warn('drawText failed:', e.message, 'for:', item.str);
+        }
       }
+      console.log(`Page ${i+1}: ${pg.textItems.length} text items found, ${drawn} drawn, ${failed} failed`);
+    } else if (addTextLayer) {
+      console.log(`Page ${i+1}: NO text items extracted from source PDF`);
     }
     onProgress(78 + Math.round(((i+1)/pages.length)*20));
   }
